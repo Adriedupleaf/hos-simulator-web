@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HOS Simulator Control</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --surface-2: #243044;
+      --border: #2d3a4f;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --success: #22c55e;
+      --error: #ef4444;
+      --code-bg: #111827;
+      --radius: 10px;
+      --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+      --mono: "SF Mono", "Cascadia Code", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .layout {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+    }
+
+    header {
+      margin-bottom: 2rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    header p {
+      color: var(--muted);
+      margin-top: 0.35rem;
+    }
+
+    .grid {
+      display: grid;
+      gap: 1.5rem;
+    }
+
+    @media (min-width: 800px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+      .span-full { grid-column: 1 / -1; }
+    }
+
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.35rem;
+    }
+
+    section h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+
+    .docs p, .docs li {
+      color: var(--muted);
+      font-size: 0.925rem;
+    }
+
+    .docs ul {
+      margin: 0.75rem 0 1rem 1.25rem;
+    }
+
+    .docs li { margin-bottom: 0.35rem; }
+
+    .docs code, .example code {
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      background: var(--code-bg);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      color: #93c5fd;
+    }
+
+    .example {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin-top: 0.75rem;
+      overflow-x: auto;
+    }
+
+    .example pre {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .param-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+      margin-top: 0.5rem;
+    }
+
+    .param-table th,
+    .param-table td {
+      text-align: left;
+      padding: 0.5rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .param-table th {
+      color: var(--muted);
+      font-weight: 500;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .param-table tr:last-child td { border-bottom: none; }
+
+    form { display: grid; gap: 1rem; }
+
+    .field label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 600;
+      margin-bottom: 0.35rem;
+    }
+
+    .field .hint {
+      display: block;
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-weight: 400;
+      margin-top: 0.1rem;
+    }
+
+    .field input {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.95rem;
+      font-family: inherit;
+      transition: border-color 0.15s;
+    }
+
+    .field input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    }
+
+    .actions {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-top: 0.25rem;
+    }
+
+    button {
+      font-family: inherit;
+      font-size: 0.925rem;
+      font-weight: 600;
+      padding: 0.65rem 1.25rem;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+
+    button[type="submit"] {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    button[type="submit"]:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    button.secondary {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    button.secondary:hover:not(:disabled) {
+      background: var(--border);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .status {
+      margin-top: 1rem;
+      padding: 0.85rem 1rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      display: none;
+    }
+
+    .status.visible { display: block; }
+
+    .status.success {
+      background: rgba(34, 197, 94, 0.12);
+      border: 1px solid rgba(34, 197, 94, 0.35);
+      color: #86efac;
+    }
+
+    .status.error {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+    }
+
+    .status strong { display: block; margin-bottom: 0.35rem; }
+
+    .status .url {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      word-break: break-all;
+      margin-top: 0.5rem;
+      color: inherit;
+      opacity: 0.9;
+    }
+
+    .last-saved {
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--code-bg);
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+
+    .last-saved:empty { display: none; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <header>
+      <h1>HOS Simulator Control</h1>
+      <p>Send parameters to the local simulator API at <code>{{ simulator_url }}</code></p>
+    </header>
+
+    <div class="grid">
+      <section class="docs span-full">
+        <h2>API Documentation</h2>
+        <p>
+          Upon start, the simulator opens a local HTTP server on port <strong>8080</strong>.
+          An external application can control it with GET requests:
+        </p>
+        <div class="example">
+          <pre>{{ simulator_url }}?param_1=value_1&amp;...&amp;param_n=value_n</pre>
+        </div>
+        <p style="margin-top: 1rem;">Accepted parameters (all optional — send only the ones you want to change):</p>
+        <table class="param-table">
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Type</th>
+              <th>Range / Values</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for name, meta in params.items() %}
+            <tr>
+              <td><code>{{ name }}</code></td>
+              <td>{{ meta.type }}</td>
+              <td>
+                {% if meta.type == 'string' %}
+                  VIN string
+                {% else %}
+                  {{ meta.min }} – {{ meta.max }}
+                {% endif %}
+              </td>
+              <td>{{ meta.description }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <p style="margin-top: 1rem;">Examples:</p>
+        <div class="example">
+          <pre>{{ simulator_url }}?vin=3WKDP49X9KF300341&amp;odo=23778.34&amp;speed=80
+{{ simulator_url }}?rpm=0</pre>
+        </div>
+      </section>
+
+      <section class="span-full">
+        <h2>Control Panel</h2>
+        <div id="lastSaved" class="last-saved"></div>
+        <form id="controlForm">
+          {% for name, meta in params.items() %}
+          <div class="field">
+            <label for="{{ name }}">
+              {{ meta.label }}
+              <span class="hint">{{ meta.description }}</span>
+            </label>
+            <input
+              type="text"
+              id="{{ name }}"
+              name="{{ name }}"
+              placeholder="{{ meta.placeholder }}"
+              {% if meta.min is defined %}data-min="{{ meta.min }}"{% endif %}
+              {% if meta.max is defined %}data-max="{{ meta.max }}"{% endif %}
+              data-type="{{ meta.type }}"
+              value="{{ last_params.get(name, '') }}"
+            >
+          </div>
+          {% endfor %}
+          <div class="actions">
+            <button type="submit" id="submitBtn">Submit to Simulator</button>
+            <button type="button" class="secondary" id="clearBtn">Clear Form</button>
+          </div>
+        </form>
+        <div id="status" class="status" role="alert"></div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("controlForm");
+    const statusEl = document.getElementById("status");
+    const submitBtn = document.getElementById("submitBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const lastSavedEl = document.getElementById("lastSaved");
+
+    function showStatus(type, title, message, url) {
+      statusEl.className = `status visible ${type}`;
+      statusEl.innerHTML = `<strong>${title}</strong>${message ? `<div>${message}</div>` : ""}${url ? `<div class="url">${url}</div>` : ""}`;
+    }
+
+    function updateLastSaved(params) {
+      const keys = Object.keys(params);
+      if (!keys.length) {
+        lastSavedEl.textContent = "";
+        return;
+      }
+      const parts = keys.map(k => `${k}=${params[k]}`).join(", ");
+      lastSavedEl.textContent = `Last submitted: ${parts}`;
+    }
+
+    async function loadLastParams() {
+      try {
+        const res = await fetch("/api/last-params");
+        const params = await res.json();
+        for (const [key, value] of Object.entries(params)) {
+          const input = form.elements[key];
+          if (input) input.value = value;
+        }
+        updateLastSaved(params);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      submitBtn.disabled = true;
+      statusEl.className = "status";
+
+      const data = {};
+      for (const el of form.elements) {
+        if (el.name && el.value.trim()) {
+          data[el.name] = el.value.trim();
+        }
+      }
+
+      try {
+        const res = await fetch("/api/submit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+        const body = await res.json();
+
+        if (body.ok) {
+          updateLastSaved(body.params);
+          showStatus(
+            "success",
+            "Parameters sent successfully",
+            body.simulator_body ? `Simulator response: ${body.simulator_body}` : "",
+            body.url
+          );
+        } else {
+          const msg = (body.errors || ["Unknown error"]).join("<br>");
+          showStatus("error", "Submission failed", msg, body.url || "");
+        }
+      } catch (err) {
+        showStatus("error", "Request failed", err.message);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    clearBtn.addEventListener("click", () => {
+      form.reset();
+      statusEl.className = "status";
+    });
+
+    loadLastParams();
+  </script>
+</body>
+</html>
