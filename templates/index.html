@@ -403,6 +403,14 @@
     .chip-event .play { color: var(--accent); margin-right: 0.3rem; }
     .chip-event.running { border-color: var(--accent); background: var(--accent-soft); }
 
+    .chip-event .chip-meta {
+      display: block;
+      font-size: 0.66rem;
+      color: var(--text-faint);
+      font-family: var(--mono);
+      margin-top: 0.15rem;
+    }
+
     .event-progress {
       margin-top: 0.6rem;
       font-size: 0.76rem;
@@ -410,11 +418,16 @@
       background: var(--accent-soft);
       border: 1px solid #4f8cf759;
       border-radius: var(--radius-sm);
-      padding: 0.5rem 0.7rem;
+      padding: 0.5rem 0.5rem 0.5rem 0.7rem;
       font-family: var(--mono);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
     }
 
     .event-progress[hidden] { display: none; }
+    .event-progress #eventProgressText { min-width: 0; }
 
     /* ---------- fields ---------- */
 
@@ -689,10 +702,14 @@
               <button type="button" class="chip chip-event" data-event="{{ event.id }}">
                 <span class="play" aria-hidden="true">▶</span>{{ event.label }}
                 <span class="chip-sub">{{ event.hint }}</span>
+                <span class="chip-meta">{{ event.steps|length }} steps · ≈{{ event.duration_label }}</span>
               </button>
               {% endfor %}
             </div>
-            <div class="event-progress" id="eventProgress" role="status" aria-live="polite" hidden></div>
+            <div class="event-progress" id="eventProgress" role="status" aria-live="polite" hidden>
+              <span id="eventProgressText"></span>
+              <button type="button" class="btn-tiny" id="stopEventBtn">Stop</button>
+            </div>
           </div>
 
           <div class="group">
@@ -862,6 +879,8 @@
     const remoteNoticeText = document.getElementById("remoteNoticeText");
     const exchangesEl = document.getElementById("exchanges");
     const eventProgress = document.getElementById("eventProgress");
+    const eventProgressText = document.getElementById("eventProgressText");
+    const stopEventBtn = document.getElementById("stopEventBtn");
     const eventButtons = [...document.querySelectorAll("[data-event]")];
 
     /* This device's identity, so we can tell our own changes from everyone else's. */
@@ -880,7 +899,6 @@
     let lastSignalAt = 0;         // last time the stream proved it was alive
     let pollTimer = null;
     let noticeTimer = null;
-    let runningEvent = null;
     const dirty = new Set();      // fields the user has edited since the last submit
 
     /* ---------- formatting ---------- */
@@ -1126,7 +1144,7 @@
       renderTiles(state.params, changed);
       renderMeta();
       renderExchanges(state.history);
-      if (runningEvent) updateEventProgress();
+      renderRunning();
 
       // Adopt live values for anything the user is not currently editing.
       for (const name of Object.keys(PARAM_META)) {
@@ -1190,9 +1208,11 @@
       }
     }, 5000);
 
+    // Keeps relative timestamps and the between-steps countdown ticking.
     setInterval(() => {
       if (liveState.updated_at) renderMeta();
       if (liveState.history && liveState.history.length) renderExchanges(liveState.history);
+      if (liveState.running) renderRunning();
     }, 1000);
 
     /* ---------- status banner ---------- */
@@ -1217,44 +1237,56 @@
 
     /* ---------- submit buttons (one in the card head, one under the form) ---------- */
 
-    function setSubmitDisabled(disabled) {
-      for (const btn of submitButtons) btn.disabled = disabled;
-    }
-
     function setSubmitting(busy) {
-      setSubmitDisabled(busy);
       for (const btn of submitButtons) {
+        btn.disabled = busy;
         btn.textContent = busy ? "Applying…" : "Apply to simulator";
       }
     }
 
     /* ---------- events ---------- */
 
-    /** Derive progress from the exchanges the server has broadcast so far. */
-    function updateEventProgress() {
-      const latest = (liveState.history || [])[0];
-      const label = latest && latest.label && latest.label.startsWith(runningEvent.label)
-        ? latest.label
-        : `${runningEvent.label} — starting…`;
-      eventProgress.textContent = `▶ ${label}`;
-    }
+    /**
+     * Sequences run on the server, so their progress arrives in the live broadcast
+     * like everything else — including on devices that did not start them.
+     */
+    function renderRunning() {
+      const running = liveState.running;
 
-    function setEventsBusy(busy, activeId) {
       for (const btn of eventButtons) {
-        btn.disabled = busy;
-        btn.classList.toggle("running", busy && btn.dataset.event === activeId);
+        btn.disabled = Boolean(running);
+        btn.classList.toggle("running", Boolean(running) && running.event === btn.dataset.event);
       }
-      setSubmitDisabled(busy);
-      eventProgress.hidden = !busy;
+
+      if (!running) {
+        eventProgress.hidden = true;
+        return;
+      }
+
+      const parts = [running.label];
+      if (running.step) parts.push(`step ${running.step}/${running.total}`);
+      if (running.note) parts.push(running.note);
+      if (running.phase === "waiting" && running.next_at) {
+        const left = Math.max(0, Math.round(running.next_at - (Date.now() / 1000 - clockSkew)));
+        parts.push(`next in ${left}s`);
+      }
+      if (running.started_by && running.started_by.client_id !== CLIENT_ID) {
+        parts.push(`started from ${describeSource(running.started_by)}`);
+      }
+
+      eventProgressText.textContent = `▶ ${parts.join(" · ")}`;
+      eventProgress.hidden = false;
     }
 
     async function runEvent(eventId) {
       const event = EVENTS.find((item) => item.id === eventId);
-      if (!event || runningEvent) return;
+      if (!event || liveState.running) return;
 
-      runningEvent = event;
-      setEventsBusy(true, eventId);
-      updateEventProgress();
+      // The event owns these parameters now — let the form follow the live state.
+      for (const step of event.steps) {
+        for (const name of Object.keys(step.params)) dirty.delete(name);
+      }
+      refreshDiffMarkers();
       statusEl.hidden = true;
 
       try {
@@ -1264,26 +1296,29 @@
           body: JSON.stringify({ client_id: CLIENT_ID }),
         });
         const body = await res.json();
-
-        // The event owns these parameters now — let the form follow the live state.
-        for (const step of event.steps) {
-          for (const name of Object.keys(step.params)) dirty.delete(name);
-        }
         if (body.state) applyState(body.state);
 
-        const steps = (body.exchanges || []).length;
         if (body.ok) {
-          showStatus("success", `${event.label} sent`, [
-            `${steps} request${steps === 1 ? "" : "s"} delivered — see Request & response.`,
+          showStatus("success", `${event.label} started`, [
+            `${event.steps.length} steps over about ${event.duration_label}` +
+            " — follow it above and in Request & response.",
           ]);
         } else {
-          showStatus("error", `${event.label} stopped`, body.errors || ["Unknown error"]);
+          showStatus("error", `${event.label} not started`, body.errors || ["Unknown error"]);
         }
       } catch (err) {
-        showStatus("error", `${event.label} failed`, [err.message]);
-      } finally {
-        runningEvent = null;
-        setEventsBusy(false, null);
+        showStatus("error", `${event.label} failed to start`, [err.message]);
+      }
+    }
+
+    async function stopEvent() {
+      try {
+        const res = await fetch("/api/events/stop", { method: "POST" });
+        const body = await res.json();
+        if (body.state) applyState(body.state);
+        if (!body.ok) showStatus("error", "Could not stop", body.errors || ["Unknown error"]);
+      } catch (err) {
+        showStatus("error", "Could not stop", [err.message]);
       }
     }
 
@@ -1351,6 +1386,8 @@
     eventButtons.forEach((btn) => {
       btn.addEventListener("click", () => runEvent(btn.dataset.event));
     });
+
+    stopEventBtn.addEventListener("click", stopEvent);
 
     document.querySelectorAll("[data-profile]").forEach((btn) => {
       btn.addEventListener("click", () => {

@@ -135,12 +135,13 @@ PROFILES = [
 # Event profiles — ordered, multi-request sequences the server plays out on its own.
 # Each step is one GET to the simulator; `delay_after` is the pause before the next
 # step. A step repeats a parameter from the step before it when the simulator needs
-# it carried over (power-up resends ignition alongside the new RPM).
+# it carried over (power-up resends ignition alongside the new RPM). Sequences run on
+# a background thread, so a step may sit idle for a minute without holding a request.
 EVENTS = [
     {
         "id": "power_up",
         "label": "Power up",
-        "hint": "Ignition on → 1s → 600 rpm",
+        "hint": "Ignition on, then 600 rpm",
         "steps": [
             {"params": {"ignition": 1}, "delay_after": 1.0, "note": "ignition on"},
             {"params": {"ignition": 1, "rpm": 600}, "note": "600 rpm, ignition carried over"},
@@ -149,10 +150,37 @@ EVENTS = [
     {
         "id": "power_off",
         "label": "Power off",
-        "hint": "Speed 0 → 1s → 0 rpm + ignition off",
+        "hint": "Roll to a stop, then engine and ignition off",
         "steps": [
             {"params": {"speed": 0}, "delay_after": 1.0, "note": "roll to a stop"},
             {"params": {"rpm": 0, "ignition": 0}, "note": "0 rpm and ignition off"},
+        ],
+    },
+    {
+        "id": "stop_resume",
+        "label": "Stop & resume",
+        "hint": "0 → 30 → 0 → 30 km/h, then stays at 30",
+        "steps": [
+            {"params": {"speed": 0}, "delay_after": 60.0, "note": "stopped for a minute"},
+            {"params": {"speed": 30}, "delay_after": 10.0, "note": "moving at 30 km/h"},
+            {"params": {"speed": 0}, "delay_after": 30.0, "note": "stopped again"},
+            {"params": {"speed": 30}, "note": "back to 30 km/h and stays there"},
+        ],
+    },
+    {
+        "id": "traffic_crawl",
+        "label": "Traffic crawl",
+        "hint": "Stop-and-go at 5 km/h, engine idling",
+        "steps": [
+            {
+                "params": {"ignition": 1, "rpm": 750, "speed": 5},
+                "delay_after": 20.0,
+                "note": "crawling at 5 km/h",
+            },
+            {"params": {"rpm": 650, "speed": 0}, "delay_after": 15.0, "note": "stopped in the queue"},
+            {"params": {"rpm": 750, "speed": 5}, "delay_after": 25.0, "note": "crawling again"},
+            {"params": {"rpm": 650, "speed": 0}, "delay_after": 10.0, "note": "stopped again"},
+            {"params": {"rpm": 800, "speed": 5}, "note": "crawling at 5 km/h and stays there"},
         ],
     },
 ]
@@ -215,6 +243,7 @@ class LiveState:
         self._updated_by: dict | None = None
         self._changed: list[str] = []
         self._history: list[dict] = []
+        self._running: dict | None = None
         self._load(legacy_path)
 
     def _load(self, legacy_path: Path | None) -> None:
@@ -247,6 +276,7 @@ class LiveState:
             "updated_by": dict(self._updated_by) if self._updated_by else None,
             "changed": list(self._changed),
             "history": list(self._history),
+            "running": dict(self._running) if self._running else None,
             "server_time": time.time(),
         }
 
@@ -283,6 +313,16 @@ class LiveState:
             self._updated_by = source
             self._record_locked(exchange)
             self._persist_locked()
+            event = self._event_locked("update")
+            self._cond.notify_all()
+            return event
+
+    def set_running(self, running: dict | None) -> dict:
+        """Publish event-sequence progress. Transient, so it is never persisted."""
+        with self._cond:
+            self._running = running
+            self._changed = []
+            self._revision += 1
             event = self._event_locked("update")
             self._cond.notify_all()
             return event
@@ -377,6 +417,28 @@ def parse_submitted_params(payload: dict) -> tuple[dict, list[str]]:
     return parsed, errors
 
 
+def _duration_label(seconds: float) -> str:
+    seconds = int(round(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, rest = divmod(seconds, 60)
+    return f"{minutes}m {rest}s" if rest else f"{minutes}m"
+
+
+# Resolve the event definitions once, at import: a typo in a step is a startup failure
+# rather than something that surfaces halfway through a running sequence.
+for _event in EVENTS:
+    if _event["id"] == "stop":
+        raise RuntimeError("Event id 'stop' collides with the /api/events/stop route.")
+    for _step in _event["steps"]:
+        _parsed, _errors = parse_submitted_params(_step["params"])
+        if _errors:
+            raise RuntimeError(f"Event '{_event['id']}' has an invalid step: {_errors}")
+        _step["parsed"] = _parsed
+    _event["duration"] = sum(_step.get("delay_after") or 0 for _step in _event["steps"][:-1])
+    _event["duration_label"] = _duration_label(_event["duration"])
+
+
 def build_simulator_url(params: dict) -> str:
     return f"{SIMULATOR_URL}?{urlencode(params)}"
 
@@ -424,6 +486,89 @@ def _dispatch(params: dict, label: str, source: dict) -> tuple[dict, int | None]
     exchange["status"] = response.status_code
     exchange["body"] = response.text[:BODY_LIMIT]
     return exchange, None
+
+
+class EventRunner:
+    """Plays one event sequence at a time on a background thread.
+
+    A sequence can span minutes, so the HTTP request only starts it; progress and
+    completion reach every device through the same live-state broadcast as everything
+    else. The pause between steps is a cancellable wait, so Stop takes effect at once
+    instead of after the current delay.
+    """
+
+    def __init__(self, state: LiveState) -> None:
+        self._state = state
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._cancel = threading.Event()
+
+    @staticmethod
+    def _progress(event: dict, step: int, phase: str, next_at: float | None, source: dict) -> dict:
+        return {
+            "event": event["id"],
+            "label": event["label"],
+            "step": step,
+            "total": len(event["steps"]),
+            "phase": phase,
+            "note": event["steps"][step - 1]["note"] if step else None,
+            "next_at": next_at,
+            "started_by": source,
+        }
+
+    def start(self, event: dict, source: dict) -> str | None:
+        """Begin a sequence. Returns an error message, or None once it is under way."""
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return "Another event is already running."
+            cancel = threading.Event()
+            self._cancel = cancel
+            self._thread = threading.Thread(
+                target=self._run,
+                args=(event, source, cancel),
+                name=f"event-{event['id']}",
+                daemon=True,
+            )
+            # Publish before starting, so the device that asked sees it immediately.
+            self._state.set_running(self._progress(event, 0, "starting", None, source))
+            self._thread.start()
+        return None
+
+    def cancel(self) -> bool:
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                return False
+            self._cancel.set()
+        return True
+
+    def _run(self, event: dict, source: dict, cancel: threading.Event) -> None:
+        total = len(event["steps"])
+        try:
+            for index, step in enumerate(event["steps"], start=1):
+                if cancel.is_set():
+                    break
+
+                self._state.set_running(self._progress(event, index, "sending", None, source))
+                label = f"{event['label']} · step {index}/{total} — {step['note']}"
+                exchange, failure = _dispatch(step["parsed"], label, source)
+                if failure:
+                    self._state.record_failure(exchange)
+                    break
+                self._state.apply(step["parsed"], source, exchange)
+
+                delay = step.get("delay_after") or 0
+                if not delay or index >= total:
+                    continue
+                self._state.set_running(
+                    self._progress(event, index, "waiting", time.time() + delay, source)
+                )
+                if cancel.wait(delay):  # True means Stop was pressed
+                    break
+        finally:
+            self._state.set_running(None)
+
+
+runner = EventRunner(live)
 
 
 def _sse(event: str, payload: dict, event_id: int | None = None) -> str:
@@ -536,49 +681,42 @@ def submit():
     )
 
 
+@app.route("/api/events/stop", methods=["POST"])
+def stop_event():
+    """Cancel the running sequence. The current step's pause is interrupted at once."""
+    stopped = runner.cancel()
+    return jsonify(
+        {
+            "ok": stopped,
+            "errors": [] if stopped else ["No event is running."],
+            "state": live.snapshot(),
+        }
+    ), (200 if stopped else 409)
+
+
 @app.route("/api/events/<event_id>", methods=["POST"])
 def run_event(event_id: str):
-    """Play out a predefined multi-step event: one simulator call per step, in order."""
+    """Start a predefined sequence. It plays out in the background, one call per step."""
     event = next((item for item in EVENTS if item["id"] == event_id), None)
     if event is None:
         return jsonify({"ok": False, "errors": [f"Unknown event '{event_id}'."]}), 404
 
     payload = request.get_json(silent=True) or {}
-    source = _client_source(payload)
-    total = len(event["steps"])
-    exchanges: list[dict] = []
-    state = live.snapshot()
+    error = runner.start(event, _client_source(payload))
+    if error:
+        return jsonify(
+            {"ok": False, "event": event_id, "errors": [error], "state": live.snapshot()}
+        ), 409
 
-    for index, step in enumerate(event["steps"], start=1):
-        parsed, errors = parse_submitted_params(step["params"])
-        if errors:  # a malformed EVENTS entry, not user input
-            return jsonify(
-                {"ok": False, "event": event_id, "errors": errors, "exchanges": exchanges}
-            ), 500
-
-        label = f"{event['label']} · step {index}/{total} — {step['note']}"
-        exchange, failure = _dispatch(parsed, label, source)
-        exchanges.append(exchange)
-
-        if failure:
-            state = live.record_failure(exchange)
-            return jsonify(
-                {
-                    "ok": False,
-                    "event": event_id,
-                    "errors": [f"Step {index}/{total} failed: {exchange['error']}"],
-                    "exchanges": exchanges,
-                    "state": state,
-                }
-            ), failure
-
-        state = live.apply(parsed, source, exchange)
-
-        delay = step.get("delay_after")
-        if delay and index < total:
-            time.sleep(delay)
-
-    return jsonify({"ok": True, "event": event_id, "exchanges": exchanges, "state": state})
+    return jsonify(
+        {
+            "ok": True,
+            "event": event_id,
+            "steps": len(event["steps"]),
+            "duration": event["duration"],
+            "state": live.snapshot(),
+        }
+    ), 202
 
 
 if __name__ == "__main__":

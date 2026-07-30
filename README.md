@@ -60,13 +60,21 @@ you also see calls made from other devices.
 
 **Events** — multi-step sequences the server plays out on its own, one request per step:
 
-| Event     | Step 1       | Wait | Step 2                |
-|-----------|--------------|------|-----------------------|
-| Power up  | `ignition=1` | 1s   | `ignition=1&rpm=600`  |
-| Power off | `speed=0`    | 1s   | `rpm=0&ignition=0`    |
+| Event         | Sequence                                                                       | Runs   |
+|---------------|--------------------------------------------------------------------------------|--------|
+| Power up      | `ignition=1` → 1s → `ignition=1&rpm=600`                                        | ≈1s    |
+| Power off     | `speed=0` → 1s → `rpm=0&ignition=0`                                             | ≈1s    |
+| Stop & resume | `speed=0` → 60s → `speed=30` → 10s → `speed=0` → 30s → `speed=30` (stays)       | ≈1m40s |
+| Traffic crawl | 5 km/h → 20s → stop → 15s → 5 → 25s → stop → 10s → 5 km/h (stays), rpm follows  | ≈1m10s |
 
-Power-up step 2 resends `ignition` alongside the new RPM, as the simulator expects. If a
-step fails the sequence stops there and the failure lands in Request & response.
+Power-up step 2 resends `ignition` alongside the new RPM, as the simulator expects.
+
+Sequences run on a **background thread**, so starting one returns immediately (`202`) and
+its progress arrives over the live stream — every device sees which step is in flight and
+counts down to the next one, whoever started it. Only one runs at a time (a second start
+gets `409`), **Stop** cancels mid-wait rather than after the current pause, and a failed
+step ends the sequence with the failure recorded in Request & response. Manual applies stay
+available while a sequence runs; the next step will simply override a conflicting value.
 
 **Profiles** — fill the form in one tap (engine off, idling, city driving, highway cruise);
 you still press Apply. **VIN presets** — three predefined VINs as one-tap chips.
@@ -89,7 +97,8 @@ until you press Apply.
 | `GET`  | `/api/state`       | Current shared state (polling fallback)                  |
 | `GET`  | `/api/stream`      | Server-sent events: `state` per change, `ping` every 15s |
 | `POST` | `/api/submit`      | JSON body of parameters → one simulator call             |
-| `POST` | `/api/events/<id>` | Run `power_up` or `power_off`                            |
+| `POST` | `/api/events/<id>` | Start a sequence — `202` accepted, `409` if one is running |
+| `POST` | `/api/events/stop` | Cancel the running sequence                              |
 
 ## Simulator API
 
@@ -114,5 +123,7 @@ Only parameters you provide are sent to the simulator.
   applied. Anything sent to the simulator by bypassing the panel is invisible to it.
 - Applied parameters survive a restart via `data/state.json`; the exchange log is
   in-memory only.
-- State and the event stream live in process memory, so run a single process — multiple
-  workers would each keep their own view.
+- State, the event stream and the sequence runner live in process memory, so run a single
+  process — multiple workers would each keep their own view and could each run a sequence.
+- Event definitions are validated at import, so a bad step is a startup error rather than a
+  surprise halfway through a run.
