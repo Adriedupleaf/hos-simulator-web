@@ -36,6 +36,8 @@ FALSY = {"0", "false", "off", "no"}
 # Single source of truth: drives the form controls, the live tiles and server-side
 # validation. `control` picks the widget; `min`/`max`/`step`/`maxlength` are rendered
 # straight onto the input so the browser enforces the same limits the server does.
+# `one_shot` fields are sent once and then emptied, so a later Apply never resends
+# them; "Use last values" skips them too (each still has its own "use" button).
 PARAMS = {
     "ignition": {
         "label": "Ignition",
@@ -80,6 +82,7 @@ PARAMS = {
         "unit": "km",
         "description": "Overrides the counter — the simulator keeps counting up from here.",
         "counts_up": True,
+        "one_shot": True,
         "steps": (-100, -10, 10, 100),
     },
     "hours": {
@@ -92,6 +95,7 @@ PARAMS = {
         "unit": "h",
         "description": "Overrides the meter — the simulator keeps counting up from here.",
         "counts_up": True,
+        "one_shot": True,
         "steps": (-100, -10, 10, 100),
     },
     "vin": {
@@ -101,6 +105,7 @@ PARAMS = {
         "maxlength": 17,
         "pattern": "[A-Za-z0-9]{1,17}",
         "description": "Vehicle identification number. Letters and digits only.",
+        "one_shot": True,
     },
 }
 

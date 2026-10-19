@@ -29,6 +29,17 @@
       --radius-sm: 9px;
       --font: system-ui, -apple-system, "Segoe UI", sans-serif;
       --mono: "SF Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+      /* Motion: one easing set and a few durations, so every cue feels related.
+         --nudge is how far things travel; reduced motion sets it to zero. */
+      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);       /* quick start, soft landing */
+      --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+      --ease-spring: cubic-bezier(0.34, 1.45, 0.64, 1);  /* slight overshoot (toggle knob) */
+      --dur-fast: 140ms;    /* hovers, presses, hints */
+      --dur-med: 220ms;     /* entrances, toggles */
+      --dur-slow: 300ms;    /* progress, larger panels */
+      --dur-cue: 900ms;     /* "this just changed" glows that fade on their own */
+      --nudge: 4px;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -100,25 +111,42 @@
       font-size: 0.8rem;
       font-weight: 550;
       white-space: nowrap;
+      transition: color var(--dur-slow) var(--ease-out), background-color var(--dur-slow) var(--ease-out),
+                  border-color var(--dur-slow) var(--ease-out);
     }
 
     .link-state .dot {
+      position: relative;
       width: 8px; height: 8px; border-radius: 50%;
       background: var(--text-faint);
+      transition: background-color var(--dur-slow) var(--ease-out);
+    }
+
+    /* The pulse is a ring in the dot's own colour that grows and fades — transform and
+       opacity only. Its pace says how healthy the link is; offline holds still. */
+    .link-state .dot::after {
+      content: "";
+      position: absolute; inset: 0;
+      border-radius: inherit;
+      background: inherit;
+      opacity: 0;
     }
 
     .link-state[data-link="live"] { border-color: #22c55e4d; background: var(--live-soft); color: #86efac; }
-    .link-state[data-link="live"] .dot { background: var(--live); animation: pulse 2.4s infinite; }
+    .link-state[data-link="live"] .dot { background: var(--live); }
+    .link-state[data-link="live"] .dot::after { animation: pulse 2.4s var(--ease-out) infinite; }
     .link-state[data-link="polling"] { border-color: #f59e0b4d; background: var(--warn-soft); color: #fcd34d; }
-    .link-state[data-link="polling"] .dot { background: var(--warn); animation: pulse 2.4s infinite; }
-    .link-state[data-link="connecting"] .dot { background: var(--warn); animation: pulse 1s infinite; }
+    .link-state[data-link="polling"] .dot { background: var(--warn); }
+    .link-state[data-link="polling"] .dot::after { animation: pulse 2.4s var(--ease-out) infinite; }
+    .link-state[data-link="connecting"] .dot { background: var(--warn); }
+    .link-state[data-link="connecting"] .dot::after { animation: pulse 1s var(--ease-out) infinite; }
     .link-state[data-link="offline"] { border-color: #f4576a4d; background: var(--error-soft); color: #fca5b0; }
     .link-state[data-link="offline"] .dot { background: var(--error); }
 
     @keyframes pulse {
-      0%   { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
-      70%  { box-shadow: 0 0 0 6px transparent; opacity: 0.75; }
-      100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+      0%   { opacity: 0.7; transform: scale(1); }
+      70%  { opacity: 0; transform: scale(2.6); }
+      100% { opacity: 0; transform: scale(2.6); }
     }
 
     /* ---------- layout ---------- */
@@ -172,7 +200,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 0.5rem 0.65rem;
-      transition: border-color 0.2s, background 0.2s;
+      transition: border-color var(--dur-med) var(--ease-out), background-color var(--dur-med) var(--ease-out);
       min-width: 0;
     }
 
@@ -219,11 +247,17 @@
     .tile.is-on .tile-value { color: #86efac; }
     .tile.is-off .tile-value { color: var(--text-dim); }
 
-    .tile.flash { animation: flash 1.1s ease-out; }
+    /* A changed value rises into place while the tile glows and fades back to its own
+       colours (no end keyframe, so on/off tiles settle on green or grey, not a default). */
+    .tile.flash { animation: flash var(--dur-cue) var(--ease-out); }
+    .tile.flash .tile-value { animation: value-in var(--dur-med) var(--ease-out); }
 
     @keyframes flash {
-      0%   { border-color: var(--accent); background: var(--accent-soft); transform: translateY(-2px); }
-      100% { border-color: var(--border); transform: translateY(0); }
+      from { border-color: var(--accent); background-color: var(--accent-soft); }
+    }
+
+    @keyframes value-in {
+      from { opacity: 0.2; transform: translateY(var(--nudge)); }
     }
 
     .live-meta {
@@ -246,6 +280,26 @@
     }
 
     .notice[hidden] { display: none; }
+
+    /* ---------- reveal / dismiss ---------- */
+
+    /* Panels toggled with the `hidden` attribute fade and nudge in from @starting-style,
+       and keep their box until the fade-out ends (display transitions discretely).
+       Browsers without support simply show and hide them as before. */
+    .notice, .event-progress, .status, .diff {
+      transition-property: opacity, transform, display;
+      transition-duration: var(--dur-fast);
+      transition-timing-function: var(--ease-out);
+      transition-behavior: allow-discrete;
+    }
+
+    .notice[hidden], .event-progress[hidden], .status[hidden] {
+      opacity: 0; transform: translateY(calc(var(--nudge) * -1));
+    }
+
+    @starting-style {
+      .notice, .event-progress { opacity: 0; transform: translateY(calc(var(--nudge) * -1)); }
+    }
 
     .fineprint {
       margin-top: 0.9rem;
@@ -272,6 +326,13 @@
     }
 
     .exchange.latest { border-color: var(--border-strong); background: var(--surface-3); }
+
+    /* A call that just arrived drops in at the top and briefly carries the accent. */
+    .exchange.is-new { animation: exchange-in var(--dur-slow) var(--ease-out); }
+
+    @keyframes exchange-in {
+      from { opacity: 0; transform: translateY(calc(var(--nudge) * -2)); border-color: var(--accent); }
+    }
     .exchange.failed { border-color: #f4576a4d; background: var(--error-soft); }
 
     .ex-head { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
@@ -318,7 +379,9 @@
       cursor: pointer;
       border-radius: var(--radius-sm);
       border: 1px solid transparent;
-      transition: background 0.15s, border-color 0.15s, transform 0.08s, opacity 0.15s;
+      transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+                  color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out),
+                  transform 80ms var(--ease-out);
     }
 
     button:active:not(:disabled) { transform: translateY(1px); }
@@ -333,6 +396,43 @@
       box-shadow: 0 8px 20px -10px #4f8cf7cc;
     }
     .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+
+    /* Submit buttons are only ever disabled while a request is in flight, so that state
+       gets a spinner and stays legible instead of looking switched off. */
+    [data-submit]:disabled { opacity: 0.85; cursor: progress; }
+    [data-submit]:disabled::before {
+      content: "";
+      display: inline-block;
+      width: 0.85em; height: 0.85em;
+      margin-right: 0.45em;
+      vertical-align: -0.1em;
+      border-radius: 50%;
+      border: 2px solid #ffffff59;
+      border-top-color: #fff;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(1turn); } }
+
+    /* After a submit, a ring leaves the button — green when applied, red when not — so
+       the outcome is visible even when the status banner is scrolled out of view. */
+    .btn-primary { position: relative; }
+    .btn-primary::after {
+      content: "";
+      position: absolute; inset: -1px;
+      border-radius: inherit;
+      box-shadow: 0 0 0 2px var(--ack-color, var(--live));
+      opacity: 0;
+      pointer-events: none;
+    }
+    .btn-primary.ack-ok::after { animation: ring-out var(--dur-cue) var(--ease-out); }
+    .btn-primary.ack-err { --ack-color: var(--error); }
+    .btn-primary.ack-err::after { animation: ring-out var(--dur-cue) var(--ease-out); }
+
+    @keyframes ring-out {
+      from { opacity: 1; transform: scale(1); }
+      to   { opacity: 0; transform: scale(1.06, 1.3); }
+    }
 
     .btn-primary.btn-compact,
     .btn-ghost.btn-compact {
@@ -396,6 +496,7 @@
     }
 
     .chip:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+    .chip:active:not(:disabled) { transform: scale(0.97); }
     .chip .chip-sub { display: block; font-size: 0.7rem; color: var(--text-faint); font-weight: 500; }
     .chip.mono .chip-sub { font-family: var(--mono); }
 
@@ -427,6 +528,22 @@
     }
 
     .event-progress[hidden] { display: none; }
+
+    /* Step k of n as a thin bar along the bottom edge; it grows as steps complete. */
+    .event-progress { position: relative; overflow: hidden; }
+    .event-progress::after {
+      content: "";
+      position: absolute; left: 0; right: 0; bottom: 0;
+      height: 2px;
+      background: var(--accent);
+      transform-origin: left;
+      transform: scaleX(var(--progress, 0));
+      transition: transform var(--dur-slow) var(--ease-out);
+    }
+
+    @starting-style {
+      .event-progress::after { transform: scaleX(0); }
+    }
     .event-progress #eventProgressText { min-width: 0; }
 
     /* ---------- fields ---------- */
@@ -438,7 +555,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 0.75rem 0.85rem 0.85rem;
-      transition: border-color 0.2s;
+      transition: border-color var(--dur-med) var(--ease-out), background-color var(--dur-med) var(--ease-out);
       scroll-margin-top: 13rem;   /* clear the sticky header when focused */
     }
 
@@ -468,6 +585,30 @@
     .diff { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; color: #fcd34d; }
     .diff[hidden] { display: none; }
     .diff .diff-value { font-family: var(--mono); }
+
+    /* The "last: … use" offer slides in from the side and fades away once taken. */
+    .diff[hidden] { opacity: 0; transform: translateX(var(--nudge)); }
+
+    #syncBtn {
+      transition-property: background-color, border-color, opacity, transform, display;
+      transition-duration: var(--dur-fast);
+      transition-timing-function: var(--ease-out);
+      transition-behavior: allow-discrete;
+    }
+    #syncBtn[hidden] { display: none; opacity: 0; transform: translateX(var(--nudge)); }
+
+    @starting-style {
+      .diff, #syncBtn { opacity: 0; transform: translateX(var(--nudge)); }
+    }
+
+    /* A value that arrived from "use", a profile or a preset glows in its control, so
+       it's clear where it landed. Colour only; the class is dropped when it ends. */
+    .field.is-filled .input-wrap input,
+    .field.is-filled .switch .track { animation: fill-pulse var(--dur-cue) var(--ease-out); }
+
+    @keyframes fill-pulse {
+      from { border-color: var(--accent); background-color: #4f8cf740; box-shadow: 0 0 0 3px var(--accent-soft); }
+    }
 
     .control-row { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.6rem; }
 
@@ -548,7 +689,8 @@
       background: #fff; border: 4px solid var(--accent);
     }
 
-    .field.is-empty input[type="range"] { opacity: 0.45; }
+    .field.is-empty input[type="range"],
+    .field-toggle.is-empty .switch .track { opacity: 0.45; }
 
     .scale {
       display: flex; justify-content: space-between;
@@ -571,7 +713,9 @@
       background: var(--surface-3);
       border: 1px solid var(--border-strong);
       display: block; position: relative;
-      transition: background 0.18s, border-color 0.18s;
+      /* opacity: the unset (dimmed) track brightens as it takes a value */
+      transition: background-color var(--dur-med) var(--ease-out), border-color var(--dur-med) var(--ease-out),
+                  opacity var(--dur-med) var(--ease-out);
       flex: 0 0 auto;
     }
 
@@ -579,7 +723,7 @@
       position: absolute; top: 3px; left: 3px;
       width: 22px; height: 22px; border-radius: 50%;
       background: var(--text-dim);
-      transition: transform 0.18s, background 0.18s;
+      transition: transform var(--dur-med) var(--ease-spring), background-color var(--dur-med) var(--ease-out);
     }
 
     .switch .state-text { font-size: 0.82rem; font-weight: 600; color: var(--text-dim); width: 2.2rem; }
@@ -608,6 +752,21 @@
     .status[hidden] { display: none; }
     .status.success { background: var(--live-soft); border-color: #22c55e59; color: #a7f3c0; }
     .status.error { background: var(--error-soft); border-color: #f4576a59; color: #fcbcc4; }
+
+    /* Replayed on every message (even when already showing); errors add one small shake. */
+    .status.is-entering { animation: status-in var(--dur-med) var(--ease-out); }
+    .status.error.is-entering {
+      animation: status-in var(--dur-med) var(--ease-out), shake 320ms var(--ease-in-out) var(--dur-med);
+    }
+
+    @keyframes status-in {
+      from { opacity: 0; transform: translateY(calc(var(--nudge) * -1)); }
+    }
+
+    @keyframes shake {
+      20%, 60% { transform: translateX(calc(var(--nudge) * -0.75)); }
+      40%, 80% { transform: translateX(calc(var(--nudge) * 0.75)); }
+    }
     .status .status-title { display: block; font-weight: 650; margin-bottom: 0.2rem; }
     .status ul { margin: 0.2rem 0 0 1.1rem; }
 
@@ -620,6 +779,23 @@
       /* Already shown under the title in the top bar. */
       .url-badge { display: none; }
     }
+
+    /* Reduced motion: nothing travels, scales, spins, shakes or loops. State still reads
+       through colour and short fades — the tile/field glows, ring and banner stay put. */
+    @media (prefers-reduced-motion: reduce) {
+      :root { --nudge: 0px; --ease-spring: var(--ease-out); }
+
+      .link-state .dot::after { animation: none !important; }
+      button:active:not(:disabled), .chip:active:not(:disabled) { transform: none; }
+      .switch .knob { transition-property: background-color; }   /* knob jumps, no slide */
+      .event-progress::after { transition: none; }
+      [data-submit]:disabled::before { animation: none; border-color: #ffffffa6; }
+      .status.error.is-entering { animation: status-in var(--dur-med) var(--ease-out); }
+      .btn-primary.ack-ok::after,
+      .btn-primary.ack-err::after { animation-name: ring-fade; }
+    }
+
+    @keyframes ring-fade { from { opacity: 1; } to { opacity: 0; } }
   </style>
 </head>
 <body>
@@ -683,7 +859,7 @@
           <div class="card-head">
             <h2 id="controlHeading">Control panel</h2>
             <div class="head-actions">
-              <button type="button" class="btn-tiny" id="syncBtn" hidden>Use live values</button>
+              <button type="button" class="btn-tiny" id="syncBtn" hidden>Use last values</button>
               <button type="button" class="btn-ghost btn-compact" data-clear>Clear</button>
               <!-- Outside the form, so it needs an explicit form owner. -->
               <button type="submit" form="controlForm" class="btn-primary btn-compact" data-submit>
@@ -727,7 +903,7 @@
             </div>
           </div>
 
-          <form id="controlForm" class="group" novalidate>
+          <form id="controlForm" class="group" novalidate autocomplete="off">
             <div class="group-head">
               <h3>Parameters</h3>
               <span class="aside">empty fields are left untouched</span>
@@ -737,12 +913,12 @@
               {% for name, meta in params.items() %}
 
               {% if meta.control == 'toggle' %}
-              <div class="field field-toggle" data-field="{{ name }}">
+              <div class="field field-toggle is-empty" data-field="{{ name }}">
                 <div class="field-text">
                   <div class="field-head">
                     <label for="{{ name }}">{{ meta.label }}</label>
                     <span class="diff" data-diff hidden>
-                      live: <span class="diff-value"></span>
+                      last: <span class="diff-value"></span>
                       <button type="button" class="btn-tiny" data-use-live="{{ name }}">use</button>
                     </span>
                   </div>
@@ -751,7 +927,7 @@
                 <label class="switch">
                   <input type="checkbox" id="{{ name }}" name="{{ name }}" role="switch">
                   <span class="track" aria-hidden="true"><span class="knob"></span></span>
-                  <span class="state-text" data-toggle-text>{{ meta.off_label }}</span>
+                  <span class="state-text" data-toggle-text>—</span>
                 </label>
               </div>
 
@@ -761,7 +937,7 @@
                   <label for="{{ name }}">{{ meta.label }}</label>
                   <span class="limit">{{ meta.limit }}</span>
                   <span class="diff" data-diff hidden>
-                    live: <span class="diff-value"></span>
+                    last: <span class="diff-value"></span>
                     <button type="button" class="btn-tiny" data-use-live="{{ name }}">use</button>
                   </span>
                 </div>
@@ -786,7 +962,7 @@
                   <label for="{{ name }}">{{ meta.label }}</label>
                   <span class="limit">{{ meta.limit }}</span>
                   <span class="diff" data-diff hidden>
-                    live: <span class="diff-value"></span>
+                    last: <span class="diff-value"></span>
                     <button type="button" class="btn-tiny" data-use-live="{{ name }}">use</button>
                   </span>
                 </div>
@@ -818,7 +994,7 @@
                   <label for="{{ name }}">{{ meta.label }}</label>
                   <span class="limit">{{ meta.limit }}</span>
                   <span class="diff" data-diff hidden>
-                    live: <span class="diff-value"></span>
+                    last: <span class="diff-value"></span>
                     <button type="button" class="btn-tiny" data-use-live="{{ name }}">use</button>
                   </span>
                 </div>
@@ -899,7 +1075,16 @@
     let lastSignalAt = 0;         // last time the stream proved it was alive
     let pollTimer = null;
     let noticeTimer = null;
-    const dirty = new Set();      // fields the user has edited since the last submit
+    let newestExchangeAt = null;  // newest call already on screen, to animate only fresh ones
+    // A checkbox can't be blank, so track which toggles hold a value; the rest are empty.
+    const setToggles = new Set();
+
+    /** Restart a one-shot CSS animation by re-adding its class. */
+    function replay(el, cls) {
+      el.classList.remove(cls);
+      void el.offsetWidth;            // restart the animation
+      el.classList.add(cls);
+    }
 
     /* ---------- formatting ---------- */
 
@@ -961,11 +1146,7 @@
         }
         valueEl.textContent = text === null ? "—" : text;
 
-        if (changed && changed.includes(name)) {
-          tile.classList.remove("flash");
-          void tile.offsetWidth;            // restart the animation
-          tile.classList.add("flash");
-        }
+        if (changed && changed.includes(name)) replay(tile, "flash");
       }
     }
 
@@ -1047,23 +1228,40 @@
 
     function renderExchanges(history) {
       if (!history || !history.length) {
+        newestExchangeAt = 0;         // an empty log is "seen": the first call animates in
         exchangesEl.replaceChildren(Object.assign(document.createElement("p"), {
           className: "empty", textContent: "No calls to the simulator yet.",
         }));
         return;
       }
-      exchangesEl.replaceChildren(...history.map((ex, i) => renderExchange(ex, i === 0)));
+      // The list is rebuilt every second for the timestamps; only calls newer than the
+      // last render animate in, and never on the first render.
+      const seen = newestExchangeAt;
+      newestExchangeAt = history[0].at;
+      exchangesEl.replaceChildren(...history.map((ex, i) => {
+        const row = renderExchange(ex, i === 0);
+        if (seen !== null && ex.at > seen) row.classList.add("is-new");
+        return row;
+      }));
     }
 
     /* ---------- form <-> live reconciliation ---------- */
 
+    /** Fill a field, or empty it when `value` is blank. */
     function setFieldValue(name, value) {
       const el = document.getElementById(name);
       if (!el) return;
+      const blank = value === undefined || value === null || value === "";
+      // Mark where a new value lands (not clears, not no-op refills).
+      const field = document.querySelector(`[data-field="${name}"]`);
+      if (field && !blank && formatValue(name, value) !== formatValue(name, currentFieldValue(name))) {
+        replay(field, "is-filled");
+      }
       if (PARAM_META[name].control === "toggle") {
-        el.checked = Boolean(Number(value));
+        if (blank) setToggles.delete(name); else setToggles.add(name);
+        el.checked = !blank && Boolean(Number(value));
       } else {
-        el.value = value === undefined || value === null ? "" : value;
+        el.value = blank ? "" : value;
       }
       syncControl(name);
     }
@@ -1076,8 +1274,10 @@
       const meta = PARAM_META[name];
 
       if (meta.control === "toggle") {
+        const isSet = setToggles.has(name);
+        field.classList.toggle("is-empty", !isSet);
         const text = field.querySelector("[data-toggle-text]");
-        if (text) text.textContent = el.checked ? meta.on_label : meta.off_label;
+        if (text) text.textContent = !isSet ? "—" : el.checked ? meta.on_label : meta.off_label;
       }
 
       if (meta.control === "range") {
@@ -1096,13 +1296,19 @@
     function currentFieldValue(name) {
       const el = document.getElementById(name);
       if (!el) return null;
-      if (PARAM_META[name].control === "toggle") return el.checked ? 1 : 0;
+      if (PARAM_META[name].control === "toggle") {
+        if (!setToggles.has(name)) return "";
+        return el.checked ? 1 : 0;
+      }
       return el.value.trim();
     }
 
-    /** Flag fields the user edited that no longer agree with the live state. */
+    /**
+     * Offer the last applied value on every field that doesn't already hold it.
+     * Fields start empty; the amber flag marks ones filled with something else.
+     */
     function refreshDiffMarkers() {
-      let anyDiff = false;
+      let anyOffer = false;
       for (const name of Object.keys(PARAM_META)) {
         const field = document.querySelector(`[data-field="${name}"]`);
         const diffEl = field && field.querySelector("[data-diff]");
@@ -1110,16 +1316,16 @@
 
         const liveText = formatValue(name, liveState.params[name]);
         const localText = formatValue(name, currentFieldValue(name));
-        const differs = dirty.has(name) && liveText !== null && liveText !== localText;
+        const offer = liveText !== null && liveText !== localText;
 
-        field.classList.toggle("differs", differs);
-        diffEl.hidden = !differs;
-        if (differs) {
+        field.classList.toggle("differs", offer && localText !== null);
+        diffEl.hidden = !offer;
+        if (offer) {
           diffEl.querySelector(".diff-value").textContent = liveText;
-          anyDiff = true;
+          if (!PARAM_META[name].one_shot) anyOffer = true;
         }
       }
-      syncBtn.hidden = !anyDiff && dirty.size === 0;
+      syncBtn.hidden = !anyOffer;
     }
 
     function applyState(state) {
@@ -1145,14 +1351,7 @@
       renderMeta();
       renderExchanges(state.history);
       renderRunning();
-
-      // Adopt live values for anything the user is not currently editing.
-      for (const name of Object.keys(PARAM_META)) {
-        if (!dirty.has(name) && state.params[name] !== undefined) {
-          setFieldValue(name, state.params[name]);
-        }
-      }
-      refreshDiffMarkers();
+      refreshDiffMarkers();   // the form is never filled from here — only offered
 
       if (isRemoteUpdate && changed && changed.length) showRemoteNotice(state);
     }
@@ -1233,6 +1432,7 @@
       statusEl.className = `status ${type}`;
       statusEl.hidden = false;
       statusEl.replaceChildren(...nodes);
+      replay(statusEl, "is-entering");
     }
 
     /* ---------- submit buttons (one in the card head, one under the form) ---------- */
@@ -1241,6 +1441,14 @@
       for (const btn of submitButtons) {
         btn.disabled = busy;
         btn.textContent = busy ? "Applying…" : "Apply to simulator";
+      }
+    }
+
+    /** Send the outcome ring off both submit buttons. */
+    function acknowledgeSubmit(ok) {
+      for (const btn of submitButtons) {
+        btn.classList.remove("ack-ok", "ack-err");
+        replay(btn, ok ? "ack-ok" : "ack-err");
       }
     }
 
@@ -1275,6 +1483,7 @@
       }
 
       eventProgressText.textContent = `▶ ${parts.join(" · ")}`;
+      eventProgress.style.setProperty("--progress", running.total ? running.step / running.total : 0);
       eventProgress.hidden = false;
     }
 
@@ -1282,9 +1491,9 @@
       const event = EVENTS.find((item) => item.id === eventId);
       if (!event || liveState.running) return;
 
-      // The event owns these parameters now — let the form follow the live state.
+      // The event owns these parameters now — empty them so a later Apply can't undo it.
       for (const step of event.steps) {
-        for (const name of Object.keys(step.params)) dirty.delete(name);
+        for (const name of Object.keys(step.params)) setFieldValue(name, "");
       }
       refreshDiffMarkers();
       statusEl.hidden = true;
@@ -1327,7 +1536,11 @@
     for (const name of Object.keys(PARAM_META)) {
       const el = document.getElementById(name);
       if (!el) continue;
-      const onEdit = () => { dirty.add(name); syncControl(name); refreshDiffMarkers(); };
+      const onEdit = () => {
+        if (PARAM_META[name].control === "toggle") setToggles.add(name);
+        syncControl(name);
+        refreshDiffMarkers();
+      };
       el.addEventListener("input", onEdit);
       el.addEventListener("change", onEdit);
 
@@ -1355,7 +1568,6 @@
 
       const next = Math.min(meta.max, Math.max(meta.min, base + delta));
       el.value = String(Math.round(next * 100) / 100);   // 2 decimals, no trailing zeros
-      dirty.add(name);
       syncControl(name);
       refreshDiffMarkers();
     }
@@ -1370,14 +1582,13 @@
       btn.addEventListener("click", () => {
         const name = btn.dataset.useLive;
         setFieldValue(name, liveState.params[name]);
-        dirty.delete(name);
         refreshDiffMarkers();
       });
     });
 
     syncBtn.addEventListener("click", () => {
-      dirty.clear();
       for (const name of Object.keys(PARAM_META)) {
+        if (PARAM_META[name].one_shot) continue;   // only on request, via their own "use"
         if (liveState.params[name] !== undefined) setFieldValue(name, liveState.params[name]);
       }
       refreshDiffMarkers();
@@ -1393,10 +1604,7 @@
       btn.addEventListener("click", () => {
         const profile = PROFILES.find((p) => p.id === btn.dataset.profile);
         if (!profile) return;
-        for (const [name, value] of Object.entries(profile.values)) {
-          setFieldValue(name, value);
-          dirty.add(name);
-        }
+        for (const [name, value] of Object.entries(profile.values)) setFieldValue(name, value);
         refreshDiffMarkers();
       });
     });
@@ -1404,17 +1612,13 @@
     document.querySelectorAll("[data-vin]").forEach((btn) => {
       btn.addEventListener("click", () => {
         setFieldValue("vin", btn.dataset.vin);
-        dirty.add("vin");
         refreshDiffMarkers();
       });
     });
 
     clearButtons.forEach((btn) => {
       btn.addEventListener("click", () => {
-        for (const name of Object.keys(PARAM_META)) {
-          setFieldValue(name, PARAM_META[name].control === "toggle" ? 0 : "");
-          dirty.add(name);   // keep the emptied form from being refilled by a live update
-        }
+        for (const name of Object.keys(PARAM_META)) setFieldValue(name, "");
         refreshDiffMarkers();
         statusEl.hidden = true;
       });
@@ -1437,12 +1641,13 @@
       }
 
       const payload = { client_id: CLIENT_ID };
-      for (const [name, meta] of Object.entries(PARAM_META)) {
+      for (const name of Object.keys(PARAM_META)) {
         const value = currentFieldValue(name);
-        if (meta.control === "toggle" || value !== "") payload[name] = value;
+        if (value !== "") payload[name] = value;
       }
 
       setSubmitting(true);
+      let applied = false;
       try {
         const res = await fetch("/api/submit", {
           method: "POST",
@@ -1451,11 +1656,16 @@
         });
         const body = await res.json();
 
-        // Clear first: applyState only refills fields that are not dirty.
-        if (body.ok) dirty.clear();
+        // Sent once: empty them so the next Apply doesn't override them again.
+        if (body.ok) {
+          for (const [name, meta] of Object.entries(PARAM_META)) {
+            if (meta.one_shot) setFieldValue(name, "");
+          }
+        }
         if (body.state) applyState(body.state);
 
         if (body.ok) {
+          applied = true;
           showStatus("success", "Applied to the simulator", [
             "See Request & response for the exact call and the simulator's reply.",
           ]);
@@ -1466,6 +1676,7 @@
         showStatus("error", "Request failed", [err.message]);
       } finally {
         setSubmitting(false);
+        acknowledgeSubmit(applied);
       }
     });
 

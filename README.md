@@ -51,8 +51,10 @@ you are seeing live updates:
 | `Offline · last known values` | Server unreachable — what you see may be stale     |
 
 When another device changes something, the affected tiles flash and a note names the
-device. Fields you are mid-edit are never overwritten: they get flagged with the live value
-and a **use** button, and **Use live values** discards all local edits at once.
+device. The form starts empty and is never filled for you: every field that doesn't hold the
+last applied value shows it with a **use** button, and **Use last values** fills them all at once.
+Odometer, engine hours and VIN are the exception: they empty themselves after every Apply
+and are skipped by **Use last values**, so they are only overridden when you fill them in.
 
 **Request & response** — the last 8 calls to the simulator, newest first: the exact URL
 sent, the reply, and which device triggered it. Failures are recorded too. It is shared, so
