@@ -29,6 +29,7 @@ HISTORY_LIMIT = 8
 DATA_DIR = Path(__file__).parent / "data"
 STATE_FILE = DATA_DIR / "state.json"
 LEGACY_STATE_FILE = DATA_DIR / "last_params.json"
+SAVED_VINS_FILE = DATA_DIR / "vins.json"
 
 TRUTHY = {"1", "true", "on", "yes"}
 FALSY = {"0", "false", "off", "no"}
@@ -196,6 +197,25 @@ VIN_PRESETS = [
     {"label": "Truck 2", "sublabel": "Volvo VNL 760", "vin": "4V4NC9EH8DN563912"},
     {"label": "Truck 3", "sublabel": "Freightliner M2", "vin": "1FUJGHDV8CLBP8834"},
 ]
+VIN_LABEL_MAX = 40
+_vins_lock = threading.Lock()
+
+
+def load_saved_vins() -> list[dict]:
+    """VINs added from the panel, kept next to the state file. Newest last."""
+    raw = _read_json(SAVED_VINS_FILE)
+    if not isinstance(raw, list):
+        return []
+    return [
+        {"label": str(item["label"]), "vin": str(item["vin"])}
+        for item in raw
+        if isinstance(item, dict) and item.get("label") and item.get("vin")
+    ]
+
+
+def _write_saved_vins(vins: list[dict]) -> None:
+    SAVED_VINS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SAVED_VINS_FILE.write_text(json.dumps(vins, indent=2), encoding="utf-8")
 
 
 def _fmt_number(value) -> str:
@@ -601,6 +621,7 @@ def index():
             "params": PARAMS,
             "profiles": PROFILES,
             "events": EVENTS,
+            "saved_vins": load_saved_vins(),
             "state": snapshot,
             "heartbeat": HEARTBEAT_SECONDS,
         },
@@ -684,6 +705,43 @@ def submit():
             "state": state,
         }
     )
+
+
+@app.route("/api/vins", methods=["POST"])
+def add_vin():
+    """Save a labelled VIN to the shared list. Re-saving a VIN replaces its label."""
+    payload = request.get_json(silent=True) or {}
+    label = str(payload.get("label") or "").strip()
+    vin, error = _coerce(PARAMS["vin"], payload.get("vin") or "")
+    errors = [error] if error else []
+    if not vin:
+        errors.append("VIN: required.")
+    if not label:
+        errors.append("Label: required.")
+    elif len(label) > VIN_LABEL_MAX:
+        errors.append(f"Label: at most {VIN_LABEL_MAX} characters.")
+    if errors:
+        return jsonify({"ok": False, "errors": errors}), 400
+
+    with _vins_lock:
+        vins = [item for item in load_saved_vins() if item["vin"] != vin]
+        vins.append({"label": label, "vin": vin})
+        try:
+            _write_saved_vins(vins)
+        except OSError:
+            return jsonify({"ok": False, "errors": ["Could not save the VIN list."]}), 500
+    return jsonify({"ok": True, "vins": vins})
+
+
+@app.route("/api/vins/<vin>", methods=["DELETE"])
+def remove_vin(vin: str):
+    with _vins_lock:
+        vins = [item for item in load_saved_vins() if item["vin"] != vin.upper()]
+        try:
+            _write_saved_vins(vins)
+        except OSError:
+            return jsonify({"ok": False, "errors": ["Could not save the VIN list."]}), 500
+    return jsonify({"ok": True, "vins": vins})
 
 
 @app.route("/api/events/stop", methods=["POST"])

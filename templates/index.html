@@ -499,6 +499,55 @@
     .chip:active:not(:disabled) { transform: scale(0.97); }
     .chip .chip-sub { display: block; font-size: 0.7rem; color: var(--text-faint); font-weight: 500; }
     .chip.mono .chip-sub { font-family: var(--mono); }
+    .chip-saved { display: inline-flex; align-items: stretch; }
+    .chip-saved .chip { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+    .chip-saved .chip-remove {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-left: 0;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      color: var(--text-faint);
+      padding: 0 0.55rem;
+    }
+    .chip-saved .chip-remove:hover:not(:disabled) { color: var(--error); }
+    .chip-add { border-style: dashed; color: var(--text-dim); align-self: stretch; }
+
+    /* ---------- add-VIN popover, floats above the "+ Add VIN" chip ---------- */
+
+    .vin-popover {
+      position: fixed;
+      inset: auto;            /* undo the UA's centred popover */
+      margin: 0;
+      width: 16rem;
+      padding: 0.75rem;
+      overflow: visible;      /* let the arrow poke out */
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      box-shadow: 0 10px 30px #00000080;
+    }
+    /* Arrow pointing at the chip; flips to the top edge when the popover opens below. */
+    .vin-popover::after {
+      content: "";
+      position: absolute;
+      left: var(--arrow-x, 50%);
+      top: 100%;
+      width: 10px;
+      height: 10px;
+      background: inherit;
+      border: inherit;
+      border-width: 0 1px 1px 0;
+      transform: translate(-50%, -50%) rotate(45deg);
+    }
+    .vin-popover:not(.placed) { visibility: hidden; }   /* no flash at the UA position before placing */
+    .vin-popover.below::after { top: 0; border-width: 1px 0 0 1px; }
+    .vin-popover .input-wrap { display: flex; margin-bottom: 0.5rem; }
+    .vin-popover .input-wrap input { font-size: 0.85rem; padding: 0.4rem 0.55rem; }
+    /* Empty required fields aren't an error until the user has touched them or tried to add. */
+    .vin-popover .input-wrap input:invalid:not(:user-invalid) { border-color: var(--border-strong); }
+    .vin-popover .dialog-errors { margin: 0 0 0.5rem; color: var(--error); font-size: 0.75rem; }
+    .vin-popover .dialog-actions { display: flex; justify-content: flex-end; gap: 0.4rem; }
 
     .chip-event { border-color: #4f8cf759; background: linear-gradient(180deg, #1b2740, #172131); }
     .chip-event .play { color: var(--accent); margin-right: 0.3rem; }
@@ -1014,6 +1063,8 @@
                     <span class="chip-sub">{{ preset.vin }} · {{ preset.sublabel }}</span>
                   </button>
                   {% endfor %}
+                  <span id="savedVins" style="display: contents;"></span>
+                  <button type="button" class="chip chip-add" id="addVinBtn" popovertarget="vinPopover">+ Add VIN</button>
                 </div>
               </div>
               {% endif %}
@@ -1031,6 +1082,25 @@
         </section>
       </div>
     </main>
+
+  <div class="vin-popover" id="vinPopover" popover role="dialog" aria-label="Add a VIN to the list">
+    <form id="vinPopoverForm">
+      <div class="input-wrap">
+        <input class="vin" type="text" name="vin" required maxlength="17" pattern="[A-Za-z0-9]{1,17}"
+               spellcheck="false" autocapitalize="characters" autocomplete="off"
+               placeholder="VIN" aria-label="VIN">
+      </div>
+      <div class="input-wrap">
+        <input type="text" name="label" required maxlength="40" autocomplete="off"
+               placeholder="Label, e.g. Truck 4" aria-label="Label">
+      </div>
+      <p class="dialog-errors" id="vinPopoverErrors" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn-ghost btn-compact" popovertarget="vinPopover" popovertargetaction="hide">Cancel</button>
+        <button type="submit" class="btn-primary btn-compact">Add</button>
+      </div>
+    </form>
+  </div>
   </div>
 
   <script id="bootstrap" type="application/json">{{ bootstrap|tojson }}</script>
@@ -1040,6 +1110,7 @@
     const PROFILES = BOOT.profiles;
     const EVENTS = BOOT.events;
     const INITIAL_STATE = BOOT.state;
+    let savedVins = BOOT.saved_vins;
     const HEARTBEAT_MS = BOOT.heartbeat * 1000;
 
     const form = document.getElementById("controlForm");
@@ -1609,11 +1680,106 @@
       });
     });
 
-    document.querySelectorAll("[data-vin]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        setFieldValue("vin", btn.dataset.vin);
-        refreshDiffMarkers();
+    /* ---------- saved VINs ---------- */
+
+    const savedVinsEl = document.getElementById("savedVins");
+    const addVinBtn = document.getElementById("addVinBtn");
+    const vinPopover = document.getElementById("vinPopover");
+    const vinPopoverForm = document.getElementById("vinPopoverForm");
+    const vinPopoverErrors = document.getElementById("vinPopoverErrors");
+
+    function renderSavedVins() {
+      savedVinsEl.replaceChildren(...savedVins.map(({ label, vin }) => {
+        const wrap = Object.assign(document.createElement("span"), { className: "chip-saved" });
+        const chip = Object.assign(document.createElement("button"), {
+          type: "button", className: "chip mono", textContent: label,
+        });
+        chip.dataset.vin = vin;
+        chip.append(Object.assign(document.createElement("span"), { className: "chip-sub", textContent: vin }));
+        const remove = Object.assign(document.createElement("button"), {
+          type: "button", className: "chip-remove", textContent: "×", title: `Remove ${label}`,
+        });
+        remove.dataset.removeVin = vin;
+        wrap.append(chip, remove);
+        return wrap;
+      }));
+    }
+
+    /* Returns null on success, otherwise the error lines to show. */
+    async function saveVins(url, options) {
+      try {
+        const res = await fetch(url, options);
+        const body = await res.json();
+        if (!body.ok) return body.errors || ["Unknown error"];
+        savedVins = body.vins;
+        renderSavedVins();
+        return null;
+      } catch (err) {
+        return [err.message];
+      }
+    }
+
+    /* Sit centred above the chip, flipping below when there's no room, kept inside the viewport. */
+    function placeVinPopover() {
+      const gap = 10, edge = 8;
+      const btn = addVinBtn.getBoundingClientRect();
+      const { width, height } = vinPopover.getBoundingClientRect();
+      const below = btn.top - gap - height < edge;
+      const left = Math.min(window.innerWidth - width - edge,
+                            Math.max(edge, btn.left + btn.width / 2 - width / 2));
+      vinPopover.classList.toggle("below", below);
+      vinPopover.style.left = `${left}px`;
+      vinPopover.style.top = `${below ? btn.bottom + gap : btn.top - gap - height}px`;
+      vinPopover.style.setProperty("--arrow-x", `${btn.left + btn.width / 2 - left}px`);
+    }
+
+    vinPopover.addEventListener("beforetoggle", (e) => {
+      if (e.newState !== "open") return vinPopover.classList.remove("placed");
+      vinPopoverForm.reset();
+      vinPopoverForm.elements.vin.value = document.getElementById("vin").value.trim();   // prefill what's typed
+      vinPopoverErrors.hidden = true;
+    });
+
+    vinPopover.addEventListener("toggle", (e) => {
+      if (e.newState !== "open") return;
+      placeVinPopover();
+      vinPopover.classList.add("placed");
+      (vinPopoverForm.elements.vin.value ? vinPopoverForm.elements.label : vinPopoverForm.elements.vin).focus();
+    });
+
+    // The popover is fixed, so follow the chip while the page scrolls or resizes.
+    for (const type of ["scroll", "resize"]) {
+      window.addEventListener(type, () => {
+        if (vinPopover.matches(":popover-open")) placeVinPopover();
+      }, { passive: true, capture: true });
+    }
+
+    vinPopoverForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const { vin, label } = vinPopoverForm.elements;
+      const errors = await saveVins("/api/vins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vin: vin.value, label: label.value }),
       });
+      if (!errors) return vinPopover.hidePopover();
+      vinPopoverErrors.textContent = errors.join(" ");
+      vinPopoverErrors.hidden = false;
+      placeVinPopover();   // the error line made it taller
+    });
+
+    // Delegated, so chips added after load work too.
+    document.querySelector('[data-field="vin"]').addEventListener("click", (e) => {
+      const remove = e.target.closest("[data-remove-vin]");
+      if (remove) {
+        saveVins(`/api/vins/${encodeURIComponent(remove.dataset.removeVin)}`, { method: "DELETE" })
+          .then((errors) => errors && showStatus("error", "VIN not removed", errors));
+        return;
+      }
+      const chip = e.target.closest("[data-vin]");
+      if (!chip) return;
+      setFieldValue("vin", chip.dataset.vin);
+      refreshDiffMarkers();
     });
 
     clearButtons.forEach((btn) => {
@@ -1684,6 +1850,7 @@
 
     setLink("connecting");
     applyState(INITIAL_STATE);
+    renderSavedVins();
     for (const name of Object.keys(PARAM_META)) syncControl(name);
     refreshDiffMarkers();
     connect();
